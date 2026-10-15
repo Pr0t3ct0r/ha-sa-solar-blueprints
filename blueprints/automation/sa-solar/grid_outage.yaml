@@ -1,0 +1,327 @@
+blueprint:
+  name: Grid outage - one message, loads off and back on, checked
+  description: >-
+    For a home with a solar inverter and a battery (load shedding in South Africa, or any outage).
+
+    When the grid goes it sends **one** message per outage and can switch heavy loads off to save the battery. When the
+    grid is back it says how long it was gone, switches the loads back on and **checks that each one really came on**:
+    a switch that is unreachable after an outage (a Wi-Fi relay behind a tripped breaker, say) raises no error when it
+    is switched, so without a check nobody knows it stayed off. The message names any that did not come on.
+
+    It watches the inverter's grid **voltage**, not its frequency (a single 0 Hz reading from an inverter monitor has
+    sent false "grid off" alarms), and a Toggle helper remembers the outage, so a Home Assistant restart or the monitor
+    reconnecting during an outage sends nothing twice, and the loads still come back if the grid returned while Home
+    Assistant was down. An unavailable sensor is not taken for an outage.
+  domain: automation
+  author: Willem de Beer
+  homeassistant:
+    min_version: 2024.10.0
+  source_url: https://github.com/Pr0t3ct0r/ha-sa-solar-blueprints/blob/main/blueprints/automation/sa-solar/grid_outage.yaml
+  input:
+    detection:
+      name: Grid
+      icon: mdi:transmission-tower
+      input:
+        grid_voltage:
+          name: Grid voltage sensor
+          description: The inverter's grid voltage (Solar Assistant, the Sunsynk or Deye integration, Victron and others).
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: voltage
+        outage_helper:
+          name: Outage helper
+          description: >-
+            A Toggle helper that this automation switches on for the length of an outage (Settings > Devices & services
+            > Helpers > Create helper > Toggle, named for example "Grid outage"). Keep it for this automation alone.
+          selector:
+            entity:
+              filter:
+                - domain: input_boolean
+        off_below:
+          name: Grid off below
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 200
+              step: 1
+              unit_of_measurement: V
+              mode: box
+        off_for:
+          name: Grid off for at least
+          description: A short wait so that one bad reading is not taken for an outage.
+          default:
+            seconds: 15
+          selector:
+            duration: {}
+        on_above:
+          name: Grid back above
+          description: With the grid on, a 230 V supply reads about 220 to 245 V.
+          default: 200
+          selector:
+            number:
+              min: 50
+              max: 260
+              step: 1
+              unit_of_measurement: V
+              mode: box
+        on_for:
+          name: Grid back for at least
+          default:
+            minutes: 2
+          selector:
+            duration: {}
+    battery:
+      name: Battery (optional)
+      icon: mdi:battery-medium
+      collapsed: true
+      input:
+        battery_soc:
+          name: Battery charge sensor
+          description: Shown in the messages, and needed for the two limits below.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: battery
+        shed_below:
+          name: Switch the loads off only when the battery is below
+          description: 100 switches them off at every outage.
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+        restore_above:
+          name: Switch the loads back on only when the battery is at least
+          description: >-
+            If the grid comes back with the battery lower than this, the loads wait until the battery reaches it (0 switches
+            them on straight away).
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+    loads:
+      name: Loads
+      icon: mdi:power-plug-outline
+      input:
+        shed_loads:
+          name: Switch off when the grid goes
+          description: Heavy loads that would drain the battery (geyser, pool pump, borehole). Leave empty to switch nothing off.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - switch
+                    - light
+                    - fan
+                    - input_boolean
+        restore_loads:
+          name: Switch on when the grid is back
+          description: >-
+            Usually the same loads (only list what should run whatever the time of day). Each is checked after the wait
+            below, and the message names any that is not on.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - switch
+                    - light
+                    - fan
+                    - input_boolean
+        check_after:
+          name: Check the loads after
+          default: 30
+          selector:
+            number:
+              min: 5
+              max: 600
+              step: 5
+              unit_of_measurement: s
+              mode: box
+    messages:
+      name: Messages
+      icon: mdi:message-text-outline
+      input:
+        notify_entities:
+          name: Notify entities
+          description: For example an email (SMTP) notify entity.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: notify
+        notify_action:
+          name: Notify action
+          description: For a phone, for example notify.mobile_app_my_phone. Leave empty when not used.
+          default: ""
+          selector:
+            text: {}
+
+mode: queued
+max: 10
+
+trigger_variables:
+  battery: !input battery_soc
+  restore_above: !input restore_above
+
+triggers:
+  - trigger: numeric_state
+    entity_id: !input grid_voltage
+    below: !input off_below
+    for: !input off_for
+    id: grid_off
+  - trigger: numeric_state
+    entity_id: !input grid_voltage
+    above: !input on_above
+    for: !input on_for
+    id: grid_on
+  # The battery reaching the restore limit while the grid is already back (loads held back for a low battery).
+  - trigger: template
+    value_template: "{{ battery != '' and states(battery) | is_number and states(battery) | float >= restore_above }}"
+    for:
+      minutes: 1
+    id: battery_up
+  # The grid came back while Home Assistant was down.
+  - trigger: homeassistant
+    event: start
+    id: start
+
+actions:
+  - variables:
+      grid: !input grid_voltage
+      latch: !input outage_helper
+      on_above: !input on_above
+      shed_below: !input shed_below
+      shed_loads: !input shed_loads
+      restore_loads: !input restore_loads
+      check_after: !input check_after
+      notify_entities: !input notify_entities
+      notify_action: !input notify_action
+      volts: "{{ states(grid) | float(0) | round(0) | int }}"
+      soc: "{{ states(battery) | float(none) if battery != '' else none }}"
+      # (Home Assistant trims a variable's leading space, so each message puts the space in front of it.)
+      soc_text: "{{ ('Battery ' ~ (soc | round(0) | int) ~ '%.') if soc is number else '' }}"
+      grid_is_on: "{{ states(grid) | is_number and states(grid) | float > on_above }}"
+  - choose:
+      - alias: The grid went
+        conditions:
+          - condition: trigger
+            id: grid_off
+          - condition: template
+            value_template: "{{ is_state(latch, 'off') }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: "{{ latch }}"
+          - variables:
+              # The loads that are on, in the order they are listed, with their names.
+              shed_now: >-
+                {{ shed_loads | select('is_state', 'on') | list if (soc is none or soc < shed_below) else [] }}
+              shed_names: >-
+                {%- set ns = namespace(n=[]) -%}
+                {%- for e in shed_now %}{% set ns.n = ns.n + [state_attr(e, 'friendly_name') or e] %}{% endfor -%}
+                {{ ns.n | join(', ') }}
+          - if: "{{ shed_now | count > 0 }}"
+            then:
+              - action: homeassistant.turn_off
+                target:
+                  entity_id: "{{ shed_now }}"
+                continue_on_error: true
+          - variables:
+              title: Grid off
+              message: >-
+                The grid went off at {{ now().strftime('%H:%M') }} ({{ volts }} V).
+                {%- if soc_text %} {{ soc_text }}{% endif %}
+                {%- if shed_now | count > 0 %} Switched off: {{ shed_names }}.{% endif %}
+          - &notify
+            alias: Send the message
+            sequence:
+              - if: "{{ notify_entities | count > 0 }}"
+                then:
+                  - action: notify.send_message
+                    target:
+                      entity_id: "{{ notify_entities }}"
+                    data:
+                      title: "{{ title }}"
+                      message: "{{ message }}"
+                    continue_on_error: true
+              - if: "{{ notify_action | trim != '' }}"
+                then:
+                  - action: "{{ notify_action | trim }}"
+                    data:
+                      title: "{{ title }}"
+                      message: "{{ message }}"
+                    continue_on_error: true
+      - alias: The grid is back, the battery too low for the loads yet
+        conditions:
+          - condition: trigger
+            id: grid_on
+          - condition: template
+            value_template: "{{ is_state(latch, 'on') and grid_is_on and soc is number and soc < restore_above }}"
+        sequence:
+          - variables:
+              title: Grid restored
+              message: >-
+                The grid came back at {{ now().strftime('%H:%M') }} ({{ volts }} V).
+                {%- if soc_text %} {{ soc_text }}{% endif %}
+                {%- if restore_loads | count > 0 %} The loads wait until the battery reaches {{ restore_above }}%.{% endif %}
+          - *notify
+      - alias: The grid is back
+        conditions:
+          - condition: trigger
+            id:
+              - grid_on
+              - battery_up
+              - start
+          - condition: template
+            value_template: "{{ is_state(latch, 'on') and grid_is_on and (soc is none or soc >= restore_above) }}"
+        sequence:
+          - variables:
+              minutes: "{{ ((now() - states[latch].last_changed).total_seconds() / 60) | round(0) | int }}"
+              gone: "{{ ((minutes // 60) ~ ' h ' if minutes >= 60 else '') ~ (minutes % 60) ~ ' min' }}"
+              waited: "{{ trigger.id == 'battery_up' }}"
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ latch }}"
+          - if: "{{ restore_loads | count > 0 }}"
+            then:
+              - action: homeassistant.turn_on
+                target:
+                  entity_id: "{{ restore_loads }}"
+                continue_on_error: true
+              - wait_template: "{{ expand(restore_loads) | rejectattr('state', 'eq', 'on') | list | count == 0 }}"
+                timeout:
+                  seconds: "{{ check_after }}"
+                continue_on_timeout: true
+          - variables:
+              # Each load as it reads now, in the order they are listed, by name.
+              came_on: >-
+                {%- set ns = namespace(n=[]) -%}
+                {%- for e in restore_loads if is_state(e, 'on') %}{% set ns.n = ns.n + [state_attr(e, 'friendly_name') or e] %}{% endfor -%}
+                {{ ns.n | join(', ') }}
+              not_on: >-
+                {%- set ns = namespace(n=[]) -%}
+                {%- for e in restore_loads if not is_state(e, 'on') %}{% set ns.n = ns.n + [state_attr(e, 'friendly_name') or e] %}{% endfor -%}
+                {{ ns.n | join(', ') }}
+              title: "{{ 'Grid restored' if not_on == '' else 'Grid restored - check the loads' }}"
+              message: >-
+                {%- if waited %}The battery reached {{ restore_above }}% with the grid back ({{ volts }} V).
+                {%- else %}The grid came back at {{ now().strftime('%H:%M') }} after {{ gone }} ({{ volts }} V).{% endif %}
+                {%- if soc_text %} {{ soc_text }}{% endif %}
+                {%- if came_on != '' %} Switched back on: {{ came_on }}.{% endif %}
+                {%- if not_on != '' %} Not on after {{ check_after }} s: {{ not_on }}. Check them.{% endif %}
+          - *notify

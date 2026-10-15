@@ -1,8 +1,11 @@
 # Home Assistant blueprints for South African solar homes
 
 Automations for a home with a solar inverter and a battery: load shedding, grid outages, a prepaid meter. They come
-from a working installation (a Deye/Sunsynk inverter read through Solar Assistant), are tested against Home Assistant's
-own test harness, and are written so that they work with any inverter integration that gives a grid voltage.
+from a working installation (a Deye/Sunsynk inverter read through Solar Assistant), are tested in Home Assistant's own
+test harness, and work with any inverter or energy meter integration that gives a grid voltage and a grid import.
+
+- [Grid outage: one message, loads off and back on, checked](#grid-outage-one-message-loads-off-and-back-on-checked)
+- [Prepaid electricity: units left, low warning, recharges](#prepaid-electricity-units-left-low-warning-recharges)
 
 ## Grid outage: one message, loads off and back on, checked
 
@@ -57,6 +60,49 @@ Why it is built the way it is:
 
 Only list loads in "Switch on when the grid is back" that should run whatever the time of day: a pool pump with its own
 daytime schedule is better left to that schedule.
+
+## Prepaid electricity: units left, low warning, recharges
+
+[![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FPr0t3ct0r%2Fha-sa-solar-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsa-solar%2Fprepaid_units.yaml)
+
+Keeps count of the units (kWh) left on a prepaid meter from the grid import your inverter or energy meter measures:
+
+- **units left** in a Number helper you can show on any dashboard;
+- **one warning** when they run low ("49.8 kWh left on the prepaid meter (the warning is set at 50 kWh). Time to buy a
+  token."), and again only after the next token;
+- **a recharge** is simply setting the helper to the meter's reading after loading a token; the message confirms it
+  ("The units are now 296.5 kWh (+249.1 kWh).").
+
+It counts kWh, not Rand, so it suits any municipality or a direct Eskom customer whatever the tariff. A metro that takes
+a fixed daily charge from the prepaid units makes the count drift: correct it from the meter now and then.
+
+Why it is built the way it is:
+
+- It works from the import reading itself, with a mark it keeps in a second helper, so a Home Assistant restart or a
+  stretch offline loses nothing: the use in between is counted at the next reading.
+- A daily import counter (back to 0 at midnight) works as well as a lifetime one (at most 1 Wh a midnight goes
+  uncounted).
+- It writes in steps (0.1 kWh by default), not on every reading, to keep the database small.
+- A rise too big to be use in one go (50 kWh by default: a meter swapped or a bad reading) is not taken off; the
+  message says so.
+
+### Setup
+
+1. Create two Number helpers (Settings > Devices & services > Helpers > Create helper > Number):
+   - "Prepaid units": minimum 0, maximum 10000, step 0.01, unit kWh, display mode Input field;
+   - "Prepaid import mark": minimum 0, maximum 1000000, step 0.001, unit kWh. Leave it at 0.
+2. Import the blueprint (the button above) and create an automation from it: the grid import energy sensor, the two
+   helpers, the warning level and where the messages go.
+3. Set "Prepaid units" to the meter's reading. After every token, set it again.
+
+| Input | Default | What it does |
+|:--|:--|:--|
+| Grid import energy sensor | (required) | kWh bought from the grid: a total or a daily counter. |
+| Units left / Import mark | (required) | The two Number helpers. |
+| Warn below | 50 kWh | One warning per token. |
+| Count in steps of | 0.1 kWh | How often the units are brought up to date. |
+| Ignore a jump bigger than | 50 kWh | Taken for a reset or a bad reading, not for use. |
+| Notify entities / Notify action | none | Where the messages go. |
 
 ## Tests
 

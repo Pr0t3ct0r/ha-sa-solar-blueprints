@@ -1,0 +1,231 @@
+blueprint:
+  name: Prepaid electricity - units left, low warning, recharges
+  description: >-
+    Keeps count of the units (kWh) left on a prepaid electricity meter from the grid import your inverter or energy
+    meter measures, warns once when the units run low, and notes each recharge. It counts kWh, not Rand, so it suits
+    any municipality or a direct Eskom customer whatever the tariff. (A metro that takes a fixed daily charge from the
+    prepaid units makes the count drift: correct it now and then from the meter.)
+
+    Two Number helpers hold the count: **Units left**, which you set from the meter after loading a token (that is the
+    recharge), and **Import mark**, which this automation keeps for itself. Because the count works from the import
+    reading itself, a Home Assistant restart or a stretch offline loses nothing: the use in between is counted at the
+    next reading. A daily import counter that starts at 0 each midnight works as well as a lifetime one.
+  domain: automation
+  author: Willem de Beer
+  homeassistant:
+    min_version: 2024.10.0
+  source_url: https://github.com/Pr0t3ct0r/ha-sa-solar-blueprints/blob/main/blueprints/automation/sa-solar/prepaid_units.yaml
+  input:
+    grid_import:
+      name: Grid import energy sensor
+      description: The energy bought from the grid, in kWh (the inverter's grid import, a total or a daily counter).
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: energy
+    units_left:
+      name: Units left (a Number helper)
+      description: >-
+        Create a Number helper (Settings > Devices & services > Helpers > Create helper > Number): minimum 0, maximum
+        10000, step 0.01, unit kWh, display mode Input field. Set it to the meter's reading now, and after every token.
+      selector:
+        entity:
+          filter:
+            - domain: input_number
+    import_mark:
+      name: Import mark (a Number helper)
+      description: >-
+        A second Number helper for this automation alone: minimum 0, maximum 1000000, step 0.001, unit kWh. Leave it
+        at 0; the automation sets it.
+      selector:
+        entity:
+          filter:
+            - domain: input_number
+    low_below:
+      name: Warn below
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 1000
+          step: 1
+          unit_of_measurement: kWh
+          mode: box
+    min_step:
+      name: Count in steps of
+      description: The units are brought up to date once this much has been imported (fewer writes to the database).
+      default: 0.1
+      selector:
+        number:
+          min: 0.01
+          max: 5
+          step: 0.01
+          unit_of_measurement: kWh
+          mode: box
+    max_jump:
+      name: Ignore a jump bigger than
+      description: >-
+        A bigger rise in one go is taken for a meter reset or a bad reading, not for use: the mark moves, the units do
+        not, and the message says so.
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 1000
+          step: 1
+          unit_of_measurement: kWh
+          mode: box
+    notify_entities:
+      name: Notify entities
+      description: For example an email (SMTP) notify entity.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: notify
+    notify_action:
+      name: Notify action
+      description: For a phone, for example notify.mobile_app_my_phone. Leave empty when not used.
+      default: ""
+      selector:
+        text: {}
+
+mode: queued
+max: 20
+
+triggers:
+  - trigger: state
+    entity_id: !input grid_import
+    id: import
+  - trigger: state
+    entity_id: !input units_left
+    id: units
+  - trigger: numeric_state
+    entity_id: !input units_left
+    below: !input low_below
+    for:
+      minutes: 5
+    id: low
+
+actions:
+  - variables:
+      units: !input units_left
+      mark: !input import_mark
+      low_below: !input low_below
+      min_step: !input min_step
+      max_jump: !input max_jump
+      notify_entities: !input notify_entities
+      notify_action: !input notify_action
+      left: "{{ states(units) | float(none) }}"
+  - choose:
+      - alias: New grid import
+        conditions:
+          - condition: trigger
+            id: import
+          - condition: template
+            value_template: "{{ trigger.to_state is not none and trigger.to_state.state | is_number and left is number }}"
+        sequence:
+          - variables:
+              now_kwh: "{{ trigger.to_state.state | float }}"
+              was: "{{ states(mark) | float(0) }}"
+              used: "{{ now_kwh - was }}"
+          # The mark at 0 means not set yet (it is left at 0 when the helper is made; a counter that starts again keeps
+          # it at least 0.001), so the first reading only sets it.
+          - choose:
+              - alias: The first reading
+                conditions: "{{ was == 0 }}"
+                sequence:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ mark }}"
+                    data:
+                      value: "{{ ([now_kwh, 0.001] | max) | round(3) }}"
+              - alias: Normal use
+                conditions: "{{ used >= min_step and used <= max_jump }}"
+                sequence:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ units }}"
+                    data:
+                      value: "{{ ([left - used, 0] | max) | round(3) }}"
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ mark }}"
+                    data:
+                      value: "{{ now_kwh | round(3) }}"
+              - alias: The counter started again (a daily counter at midnight, or a meter reset)
+                conditions: "{{ used < 0 }}"
+                sequence:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ mark }}"
+                    data:
+                      value: "{{ ([now_kwh, 0.001] | max) | round(3) }}"
+              - alias: A jump too big to be use
+                conditions: "{{ used > max_jump }}"
+                sequence:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ mark }}"
+                    data:
+                      value: "{{ now_kwh | round(3) }}"
+                  - sequence:
+                      - variables:
+                          title: Prepaid electricity - check the units
+                          message: >-
+                            The grid import jumped {{ used | round(1) }} kWh in one go, more than {{ max_jump }} kWh, so it
+                            was not taken off the units ({{ left | round(1) }} kWh left). Check the meter and correct
+                            the units if that was real use.
+                      - &notify
+                        alias: Send the message
+                        sequence:
+                          - if: "{{ notify_entities | count > 0 }}"
+                            then:
+                              - action: notify.send_message
+                                target:
+                                  entity_id: "{{ notify_entities }}"
+                                data:
+                                  title: "{{ title }}"
+                                  message: "{{ message }}"
+                                continue_on_error: true
+                          - if: "{{ notify_action | trim != '' }}"
+                            then:
+                              - action: "{{ notify_action | trim }}"
+                                data:
+                                  title: "{{ title }}"
+                                  message: "{{ message }}"
+                                continue_on_error: true
+      - alias: A recharge (the units went up; this automation only takes them down)
+        conditions:
+          - condition: trigger
+            id: units
+          - condition: template
+            value_template: >-
+              {{ trigger.from_state is not none and trigger.to_state is not none
+                 and trigger.from_state.state | is_number and trigger.to_state.state | is_number
+                 and trigger.to_state.state | float > trigger.from_state.state | float + 0.001 }}
+        sequence:
+          - variables:
+              before: "{{ trigger.from_state.state | float }}"
+              title: Prepaid electricity - recharged
+              message: >-
+                The units are now {{ left | round(1) }} kWh ({{ '+' ~ ((left - before) | round(1)) }} kWh).
+          - *notify
+      - alias: Running low
+        conditions:
+          - condition: trigger
+            id: low
+          # A real crossing from above, not a value restored at start-up.
+          - condition: template
+            value_template: >-
+              {{ trigger.from_state is not none and trigger.from_state.state | is_number
+                 and trigger.from_state.state | float >= low_below }}
+        sequence:
+          - variables:
+              title: Prepaid electricity - running low
+              message: >-
+                {{ left | round(1) }} kWh left on the prepaid meter (the warning is set at {{ low_below }} kWh). Time to
+                buy a token.
+          - *notify

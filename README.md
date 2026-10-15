@@ -11,6 +11,8 @@ test harness, and work with any inverter or energy meter integration that gives 
 
 [![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FPr0t3ct0r%2Fha-sa-solar-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsa-solar%2Fgrid_outage.yaml)
 
+Questions and feedback: [the topic on the Home Assistant community forum](https://community.home-assistant.io/t/grid-outage-or-load-shedding-one-message-loads-off-and-back-on-and-a-check-that-they-really-came-back/1028962).
+
 When the grid goes:
 
 - **one message** per outage ("Grid off at 18:02 (0 V). Battery 64%. Switched off: Geyser, Pool pump."),
@@ -64,6 +66,8 @@ daytime schedule is better left to that schedule.
 ## Prepaid electricity: units left, low warning, recharges
 
 [![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FPr0t3ct0r%2Fha-sa-solar-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsa-solar%2Fprepaid_units.yaml)
+
+Questions and feedback: [the topic on the Home Assistant community forum](https://community.home-assistant.io/t/prepaid-electricity-meter-units-left-one-low-warning-per-token-recharges-kwh-any-municipality/1028964).
 
 Keeps count of the units (kWh) left on a prepaid meter from the grid import your inverter or energy meter measures:
 

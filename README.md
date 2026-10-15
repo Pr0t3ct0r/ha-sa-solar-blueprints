@@ -106,11 +106,12 @@ Why it is built the way it is:
 
 ## Tests
 
-`tests/` runs the blueprint in Home Assistant's own test harness
-([pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component)):
+`tests/` runs the blueprints in Home Assistant's own test harness
+([pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component)),
+which installs the latest Home Assistant (tested with 2026.10.1; Python 3.14.2 or newer):
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 .venv/bin/pip install -r requirements_test.txt
 .venv/bin/pytest
 ```
